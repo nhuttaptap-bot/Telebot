@@ -1,189 +1,83 @@
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const http = require('http');
+// =============================== // TELEGRAM BOT FULL – FINAL VERSION // ADMIN + USER + KEY + HISTORY + STATS + STOP + HELP // ===============================
 
-const TOKEN = process.env.BOT_TOKEN;
-const API_URL = 'https://bcrapj-6dju.onrender.com/data';
+const TelegramBot = require('node-telegram-bot-api'); const axios = require('axios'); const fs = require('fs');
+
+const TOKEN = process.env.BOT_TOKEN; const ADMIN_KEY = process.env.ADMIN_KEY; const API_URL = 'https://bcrapj-6dju.onrender.com/data';
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// ================== BIẾN GLOBAL ==================
-let lastResults = {};
-let predictions = {};
-let autoTimers = {};
-let chatIds = {};
-let activeTablesByChat = {}; // chatId -> Set(tableId)
+// ===== FILE ===== const USERS_FILE = './users.json'; const KEYS_FILE = './keys.json'; if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '{}'); if (!fs.existsSync(KEYS_FILE)) fs.writeFileSync(KEYS_FILE, '{}'); let users = JSON.parse(fs.readFileSync(USERS_FILE)); let keys = JSON.parse(fs.readFileSync(KEYS_FILE));
 
-// ================== RANDOM DỰ ĐOÁN ==================
-function randomPredict() {
-    return Math.random() < 0.5
-        ? { prediction: 'B', reason: 'Random 50% - Banker' }
-        : { prediction: 'P', reason: 'Random 50% - Player' };
+// ===== MEMORY ===== let autoTimers = {}; let lastResults = {}; let predictions = {};
+
+const saveUsers = () => fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2)); const saveKeys = () => fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2));
+
+const isAdmin = (id) => users[id]?.role === 'admin'; const isLogin = (id) => users[id];
+
+// ===== PREDICT ===== const randomPredict = () => (Math.random() < 0.5 ? 'B' : 'P');
+
+// ===== API ===== async function getData() { try { const res = await axios.get(API_URL, { timeout: 3000 }); return res.data; } catch { return null; } }
+
+// ===== LOGIN ===== bot.onText(/^/key (.+)/, (msg, m) => { const id = msg.chat.id; const key = m[1];
+
+if (key === ADMIN_KEY) { users[id] = { role: 'admin', key, usedKeys: [key], history: {} }; saveUsers(); return bot.sendMessage(id, '👑 Đăng nhập ADMIN thành công'); }
+
+const info = keys[key]; if (!info) return bot.sendMessage(id, '❌ Key không tồn tại'); if (Date.now() > info.expire) return bot.sendMessage(id, '⛔ Key đã hết hạn');
+
+users[id] = users[id] || { usedKeys: [], history: {} }; users[id].role = 'user'; users[id].key = key; if (!users[id].usedKeys.includes(key)) users[id].usedKeys.push(key); saveUsers();
+
+const days = Math.ceil((info.expire - Date.now()) / 86400000); bot.sendMessage(id, ✅ Đăng nhập thành công\n⏳ Còn ${days} ngày); });
+
+// ===== ADMIN KEY CONTROL ===== bot.onText(/^/genkey (\d+)/, (msg, m) => { const id = msg.chat.id; if (!isAdmin(id)) return; const days = parseInt(m[1]); const key = 'U-' + Math.random().toString(36).substring(2, 10).toUpperCase(); keys[key] = { expire: Date.now() + days * 86400000 }; saveKeys(); bot.sendMessage(id, 🔑 Key: ${key}\n⏳ ${days} ngày); });
+
+bot.onText(/^/listkey$/, (msg) => { const id = msg.chat.id; if (!isAdmin(id)) return; let text = '📦 DANH SÁCH KEY\n'; for (const k in keys) { const d = Math.ceil((keys[k].expire - Date.now()) / 86400000); text += ${k} | ${d} ngày\n; } bot.sendMessage(id, text || 'Trống'); });
+
+bot.onText(/^/delkey (.+)/, (msg, m) => { const id = msg.chat.id; if (!isAdmin(id)) return; delete keys[m[1]]; saveKeys(); bot.sendMessage(id, '🗑️ Đã xoá key'); });
+
+bot.onText(/^/userinfo (\d+)/, (msg, m) => { const id = msg.chat.id; if (!isAdmin(id)) return; const u = users[m[1]]; if (!u) return bot.sendMessage(id, '❌ Không tìm thấy user'); bot.sendMessage(id, 🆔 ${m[1]}\n🔑 Key: ${u.key}\n📦 Đã dùng ${u.usedKeys.length} key); });
+
+// ===== TABLE COMMAND ===== for (let i = 1; i <= 16; i++) { const table = C${String(i).padStart(2, '0')}; bot.onText(new RegExp(^/${table.toLowerCase()}$), async (msg) => { const id = msg.chat.id; if (!isLogin(id)) return bot.sendMessage(id, '🔐 Vui lòng nhập /key');
+
+const data = await getData();
+if (!data) return bot.sendMessage(id, '❌ API lỗi');
+const t = data.find(x => x.ban === table);
+if (!t) return;
+
+const predict = randomPredict();
+predictions[table] = predict;
+lastResults[table] = t.ket_qua;
+
+users[id].history[table] = users[id].history[table] || [];
+saveUsers();
+
+bot.sendMessage(id, `🎰 ${table}\n📊 ${t.ket_qua}\n🎯 Dự đoán: ${predict}`);
+
+if (!autoTimers[table]) {
+  autoTimers[table] = setInterval(async () => {
+    const d = await getData();
+    const tb = d?.find(x => x.ban === table);
+    if (!tb || tb.ket_qua === lastResults[table]) return;
+
+    const result = tb.ket_qua.slice(-1).toUpperCase();
+    const ok = result === predictions[table];
+    users[id].history[table].push(ok);
+    if (users[id].history[table].length > 20)
+      users[id].history[table].shift();
+    saveUsers();
+
+    lastResults[table] = tb.ket_qua;
+    predictions[table] = randomPredict();
+
+    bot.sendMessage(id, `🔔 ${table} ra ${result} ${ok ? '✅' : '❌'}`);
+  }, 3000);
 }
 
-// ================== LẤY API ==================
-async function getData() {
-    try {
-        const response = await axios.get(API_URL, { timeout: 3000 });
-        return response.data;
-    } catch (error) {
-        console.log('API Error:', error.message);
-        return null;
-    }
-}
+}); }
 
-// ================== GỬI TIN NHẮN RANDOM ==================
-function sendRandomMessage(tableId, chatId, table) {
-    const analysis = randomPredict();
+// ===== HISTORY ===== bot.onText(/^/history (C\d{2})/, (msg, m) => { const id = msg.chat.id; if (!isLogin(id)) return; const h = users[id].history[m[1]] || []; const win = h.filter(x => x).length; const lose = h.length - win; bot.sendMessage(id, 📊 ${m[1]}\n✅ Đúng: ${win}\n❌ Sai: ${lose}); });
 
-    let message = `🎰 ${tableId}\n`;
-    message += `⏰ ${table.time}\n`;
-    if (table.cau) message += `📋 ${table.cau}\n`;
-    message += `\n📊 Kết quả hiện tại:\n\`${table.ket_qua}\`\n\n`;
+// ===== STOP ===== bot.onText(/^/stop(?: (C\d{2}))?/, (msg, m) => { const id = msg.chat.id; if (m[1]) { clearInterval(autoTimers[m[1]]); delete autoTimers[m[1]]; return bot.sendMessage(id, 🛑 Đã dừng ${m[1]}); } for (const t in autoTimers) clearInterval(autoTimers[t]); autoTimers = {}; bot.sendMessage(id, '🛑 Đã dừng toàn bộ'); });
 
-    predictions[tableId] = analysis.prediction;
-    message += `🎲 DỰ ĐOÁN TIẾP: ${analysis.prediction === 'B' ? 'BANKER 🏦' : 'PLAYER 👤'}\n`;
-    message += `📝 ${analysis.reason}`;
+// ===== HELP ===== bot.onText(/^/help$/, (msg) => { const id = msg.chat.id; let text = '📖 USER\n/key <key>\n/c01→/c16\n/history Cxx\n/stop'; if (isAdmin(id)) text += '\n\n👑 ADMIN\n/genkey <ngày>\n/listkey\n/delkey <key>\n/userinfo <id>'; bot.sendMessage(id, text); });
 
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-}
-
-// ================== CHECK AUTO ==================
-async function checkAndNotify(tableId) {
-    const chatId = chatIds[tableId];
-    if (!chatId) return;
-
-    const data = await getData();
-    if (!data) return;
-
-    const table = data.find(t => t.ban === tableId);
-    if (!table) return;
-
-    const currentResult = table.ket_qua;
-    const oldResult = lastResults[tableId];
-
-    if (oldResult && currentResult !== oldResult) {
-        const oldPrediction = predictions[tableId];
-        const newLastChar = currentResult.slice(-1).toUpperCase();
-
-        let notifyMsg = `🔔 ${tableId} CÓ KẾT QUẢ MỚI!\n`;
-        notifyMsg += `⏰ ${table.time}\n\n`;
-        notifyMsg += `📊 Kết quả: `;
-        notifyMsg += newLastChar === 'B' ? 'BANKER 🏦\n' :
-                     newLastChar === 'P' ? 'PLAYER 👤\n' : 'TIE ⚖️\n';
-
-        if (oldPrediction && (newLastChar === 'B' || newLastChar === 'P')) {
-            notifyMsg += `📈 Dự đoán trước: ${oldPrediction === 'B' ? 'BANKER' : 'PLAYER'} `;
-            notifyMsg += oldPrediction === newLastChar ? '✅ ĐÚNG\n\n' : '❌ SAI\n\n';
-        }
-
-        bot.sendMessage(chatId, notifyMsg);
-
-        setTimeout(() => {
-            sendRandomMessage(tableId, chatId, table);
-        }, 2000);
-
-        lastResults[tableId] = currentResult;
-    }
-}
-
-// ================== /c01 → /c16 ==================
-for (let i = 1; i <= 16; i++) {
-    const tableId = `C${i.toString().padStart(2, '0')}`;
-
-    bot.onText(new RegExp(`^/${tableId.toLowerCase()}$`), async (msg) => {
-        const chatId = msg.chat.id;
-
-        const data = await getData();
-        if (!data) return bot.sendMessage(chatId, '❌ Không kết nối API');
-
-        const table = data.find(t => t.ban === tableId);
-        if (!table) return bot.sendMessage(chatId, `❌ Không thấy ${tableId}`);
-
-        sendRandomMessage(tableId, chatId, table);
-
-        lastResults[tableId] = table.ket_qua;
-        chatIds[tableId] = chatId;
-
-        if (!activeTablesByChat[chatId]) {
-            activeTablesByChat[chatId] = new Set();
-        }
-        activeTablesByChat[chatId].add(tableId);
-
-        if (!autoTimers[tableId]) {
-            autoTimers[tableId] = setInterval(() => {
-                checkAndNotify(tableId);
-            }, 3000);
-        }
-    });
-}
-
-// ================== /stop (DỪNG TẤT CẢ) ==================
-bot.onText(/^\/stop$/, (msg) => {
-    const chatId = msg.chat.id;
-    const tables = activeTablesByChat[chatId];
-
-    if (!tables || tables.size === 0) {
-        return bot.sendMessage(chatId, 'ℹ️ Không có bàn nào đang chạy.');
-    }
-
-    for (const tableId of tables) {
-        clearInterval(autoTimers[tableId]);
-        delete autoTimers[tableId];
-    }
-
-    activeTablesByChat[chatId].clear();
-    bot.sendMessage(chatId, '🛑 Đã DỪNG toàn bộ AUTO.');
-});
-
-// ================== /stop c01 ==================
-bot.onText(/^\/stop\s+(c\d{2})$/i, (msg, match) => {
-    const chatId = msg.chat.id;
-    const tableId = match[1].toUpperCase();
-
-    if (!autoTimers[tableId]) {
-        return bot.sendMessage(chatId, `ℹ️ ${tableId} không chạy.`);
-    }
-
-    clearInterval(autoTimers[tableId]);
-    delete autoTimers[tableId];
-
-    activeTablesByChat[chatId]?.delete(tableId);
-    bot.sendMessage(chatId, `🛑 Đã DỪNG ${tableId}.`);
-});
-
-// ================== /status ==================
-bot.onText(/^\/status$/, (msg) => {
-    const chatId = msg.chat.id;
-    const tables = activeTablesByChat[chatId];
-
-    if (!tables || tables.size === 0) {
-        return bot.sendMessage(chatId, 'ℹ️ Không có bàn nào đang chạy.');
-    }
-
-    bot.sendMessage(chatId, `📊 Đang chạy: ${[...tables].join(', ')}`);
-});
-
-// ================== /help ==================
-bot.onText(/^\/help$/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId,
-`🤖 HƯỚNG DẪN BOT
-
-/c01 → /c16 : Bật auto bàn
-/stop         : Dừng tất cả
-/stop c01     : Dừng 1 bàn
-/status       : Xem bàn đang chạy
-/help         : Xem hướng dẫn
-
-⚠️ Render Free có thể sleep khi không dùng`
-    );
-});
-
-// ================== HTTP SERVER (CHO RENDER) ==================
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-    res.end('Bot is running');
-}).listen(PORT);
-
-console.log('🎲 BOT RANDOM 50% ĐANG CHẠY!');
+console.log('🚀 BOT FULL FINAL ĐANG CHẠY');
