@@ -1,5 +1,5 @@
 {
-  "name": "tele-bot",
+  "name": "TelegramBot-bot",
   "version": "1.0.0",
   "main": "bot.js",
   "scripts": {
