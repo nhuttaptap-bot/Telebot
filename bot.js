@@ -110,7 +110,7 @@ bot.onText(/^\/delkey (.+)/, (msg, m) => {
   const key = m[1];
   if (!keys[key]) {
     return bot.sendMessage(adminId, '❌ Key không tồn tại');
-  }
+  });
 
   // Logout user đang dùng key
   for (const uid in users) {
